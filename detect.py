@@ -23,6 +23,9 @@ from utils.general import check_img_size, check_requirements, check_imshow, colo
 from utils.plots import colors, plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
+from motpy import Detection, MultiObjectTracker
+import numpy as np
+
 
 @torch.no_grad()
 def run(weights='yolov5s.pt',  # model.pt path(s)
@@ -62,6 +65,9 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
     device = select_device(device)
     half &= device.type != 'cpu'  # half precision only supported on CUDA
 
+    tracker = MultiObjectTracker(dt=0.1)
+    
+    
     # Load model
     model = attempt_load(weights, map_location=device)  # load FP32 model
     stride = int(model.stride.max())  # model stride
@@ -133,13 +139,18 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
+                out_detections = []
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+                        
+                        object_box = np.array([int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])])
+                        out_detections.append(Detection(box=object_box, score=conf.to('cpu')))
+                        
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
-
+                            
                     if save_img or save_crop or view_img:  # Add bbox to image
                         c = int(cls)  # integer class
                         label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
@@ -147,6 +158,14 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                         if save_crop:
                             save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
+                tracker.step(out_detections)
+                tracks = tracker.active_tracks(3)
+
+                for track in tracks:
+                    label = f'{track.id[:5]}'
+                    plot_one_box(track.box, im0, label=label, color=colors(int(cls)), line_thickness=3)
+
+                            
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
 
